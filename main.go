@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"flag"
 	"fmt"
 	"os"
@@ -21,13 +22,19 @@ var (
 func main() {
 	flag.Parse()
 
-	watcher, err := initWatches()
+	wd, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "failed to get working dir", err)
+	}
+
+	watcher, err := initWatches(wd)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 
 	go handleEvents(watcher)
+	go handleEnter(wd)
 
 	sigs := make(chan os.Signal)
 	signal.Notify(sigs, os.Interrupt, os.Kill)
@@ -42,18 +49,13 @@ func main() {
 	}
 }
 
-func initWatches() (*fsnotify.Watcher, error) {
+func initWatches(workingDir string) (*fsnotify.Watcher, error) {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to create watcher")
 	}
 
-	wd, err := os.Getwd()
-	if err != nil {
-		return nil, errors.Wrap(err, "failed to get working directory")
-	}
-
-	err = filepath.Walk(wd, func(path string, info os.FileInfo, err error) error {
+	err = filepath.Walk(workingDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return errors.Wrapf(err, "error occurred while walking: %s", path)
 		}
@@ -156,6 +158,22 @@ func handleEvent(watcher *fsnotify.Watcher, ev fsnotify.Event) error {
 	return nil
 }
 
+// handleEnter doesn't necessarily need to be done like this
+// we could get into stty calls and all that to hide echoing the output
+// etc. but we just do the naive thing.
+func handleEnter(wd string) {
+	scanner := bufio.NewScanner(os.Stdin)
+	for scanner.Scan() {
+		if err := runTestsForDir(wd); err != nil {
+			fmt.Fprintln(os.Stderr, "error running go test", err)
+		}
+	}
+}
+
+func runTestsForDir(dir string) error {
+	return runGoTest(dir)
+}
+
 func runTestsForFile(file string) error {
 	filename := filepath.Base(file)
 	dir := filepath.Dir(file)
@@ -165,6 +183,10 @@ func runTestsForFile(file string) error {
 		return nil
 	}
 
+	return runGoTest(dir)
+}
+
+func runGoTest(dir string) error {
 	args := []string{"test"}
 	otherArgs := flag.Args()
 	args = append(args, otherArgs...)
